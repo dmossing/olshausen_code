@@ -9,14 +9,19 @@ import numpy as np
 import sys
 import tables
 import matplotlib.pyplot as plt
+import glob
+import cv2
 #plt.interactive(1)
 #from ipdb import set_trace as trace
 #import cProfile # profile the code with cProfile.run('self.learn(stimexp, spike)')
 
 class heisenberg(object):
 
-	def __init__(self):
-		self.im=32
+	def __init__(self, which_kind):
+		if which_kind == 'urs':
+			self.im=32
+		else:
+			self.im=60
 		self.win=8
 		self.step=3.
 		self.frame=np.int(np.floor((self.im-self.win+1)/self.step))
@@ -28,12 +33,76 @@ class heisenberg(object):
 		self.rdim = 1024 # dimensionality to retain from 32**2=1024 -- [TODO] Empty dimensions might be what leads to funky HF structure in the filters?
 
 		self.bin = 3. # time bins to reduce sampling rate from 150fps to 50 fps
-		self.dt = self.bin * .0066 # time step to get rate in spikes/second
+		self.dt = self.bin * .0066667 # time step to get rate in spikes/second
 		self.Ttrain = 18000
 		self.lam = .01 # l2 regularizer -- .01 seems to work, does not improve things though
 
+	def load_data_mike(self, dataset='zc1_12_8_data_multi'):
+		path_to_spikes = 'resp_'+dataset+'.h5'
+		movie_names = 'trnstims_'+dataset+'.txt'
+		with open(movie_names,'r') as f:
+			stimfiles = f.readlines()
+		available = glob.glob('PEsacc*')
+		#print(len(available))
+		stimfiles = [el[:-1]+'_60.h5' for el in stimfiles]
+		for el in stimfiles:
+			print(el)
+		stims_avail = [el for el in stimfiles if el in available]
+		is_avail = np.asarray([el in available for el in stimfiles])
+		with tables.open_file(path_to_spikes, mode='r') as h5:
+			resp = h5.get_node('/trnresp')[:]
+			print(resp.shape)
+			print(is_avail.size)
+			resp = resp[np.asarray(is_avail)]
+			Nstims = resp.shape[0]
+			Ntime = resp.shape[1]
+			Ncells = resp.shape[2]
+			spikes = np.reshape(np.rollaxis(resp,1),(Nstims*Ntime,Ncells))
+		self.channels = Ncells
+		stim = np.zeros((Nstims*Ntime,60,60))
+		for i in range(Nstims):
+			with tables.open_file(stims_avail[i], mode='r') as h5:
+				img_rgb = h5.get_node('/stim')[:]
+			for j in range(Ntime):
+				stim[i*Ntime+j,:,:] = cv2.cvtColor(img_rgb[j,:,:,:],cv2.COLOR_RGB2GRAY)
+		if stim.shape[1]>self.im or stim.shape[2]>self.im:
+			skipx = round((stim.shape[1]-self.im)/2)
+			skipy = round((stim.shape[2]-self.im)/2)
+			stim = stim[:,skipx:skipx+self.im,skipy:skipy+self.im]
+	
+		self.T=stim.shape[0]
+		stim = stim.astype('double')
+		stim = stim - stim.mean(0)[np.newaxis, :]
+		stim = stim / stim.std(0)[np.newaxis, :]
 
-	def load_data(self, session='tigerp6', movie='duck8'):
+		# compute 3x downsampled stimulus
+		if self.bin > 1:
+			Tsub = np.floor(self.T/self.bin)
+			stim = stim[0:self.bin*Tsub,:,:].transpose(1,2,0).reshape(self.im,self.im,Tsub, self.bin).sum(3).transpose(2,0,1)/3.
+			self.T=Tsub
+
+		if self.whiten:
+			cov = np.dot(stim.reshape(self.T,self.im**2).T, stim.reshape(self.T,self.im**2))/self.T
+			#cov = np.dot(stim.reshape(self.T,stim.shape[1]*stim.shape[2]).T, stim.reshape(self.T,stim.shape[1]*stim.shape[2]))/self.T
+			D, E = np.linalg.eigh(cov) # h for symmetric matrices
+			E = E[:, np.argsort(D)[::-1]]
+			D.sort()
+			D=D[::-1]
+			self.D=D
+			wM = np.dot(E[:,0:self.rdim], np.dot(np.diag((D[0:self.rdim]+.1)**-.5), E[:,0:self.rdim].T))
+			stim = np.dot(wM, stim.reshape(self.T,stim.shape[1]*stim.shape[2]).T).T.reshape(self.T,stim.shape[1],stim.shape[2])
+			# adding to the diagonal means the output will not be quite unit variance.
+			#stim = stim[:,1:31, 1:31] # crop the center 
+			#self.im = 30
+		
+		
+		# compute global normalizers: (not compatible with rDIM)
+		fft = np.abs(np.fft.fft2(stim[:,self.win:2*self.win,self.win:2*self.win]))
+		self.f_mean = np.fft.fftshift(fft.mean(0))
+		self.f_std = np.fft.fftshift((fft-fft.mean(0)).std(0))
+		return (stim,spikes)
+
+	def load_data_urs(self, session='tigerp6', movie='duck8'):
 		
 		d = {"tigerp6":"tiger_p6", "duck8":"q10_duck8", "duck30":"q20_duck30"}
 		#path_to_movies = "./movies.h5" # with data in format /movie [frames * x * y] 3d array 

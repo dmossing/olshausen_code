@@ -14,6 +14,7 @@ import tables
 import matplotlib.pyplot as plt
 plt.interactive(1)
 import heise
+import os
 #from ipdb import set_trace as trace
 #import cProfile # profile the code with cProfile.run('self.learn(stimexp, spike)')
 
@@ -29,10 +30,11 @@ if __name__ == '__main__':
 	# edit heise.ph to change parameters in __init__ and give it the data file names in load_data
 
 	# initialize: grab the data
-	self = heise.heisenberg('urs')
-	session='tigerp6'
-	movie='duck8'
-	(stim, spikes) = self.load_data_urs(session=session, movie=movie) #self.channels defined here 
+	self = heise.heisenberg('mike')
+	os.chdir('/Volumes/mpUltra-DPM/mike_data')
+	(stim, spikes) = self.load_data_mike('zc1_12_8_data_multi') #self.channels defined here 
+	print(stim.shape)
+	print(spikes.shape)
 	stimexp = self.expand_stim(stim)
 #	self.channels = spikes.shape[0]
 
